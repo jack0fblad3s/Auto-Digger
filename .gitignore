@@ -1,13 +1,17 @@
+# Unity generated
 Library/
 Temp/
 Logs/
 Obj/
 Build/
-.vs/
 UserSettings/
+.vs/
+
+# IDE and OS
 *.csproj
 *.sln
 *.unityproj
 *.tmp
 *.user
 *.vsconfig
+.DS_Store

@@ -17,6 +17,19 @@ public class Block : MonoBehaviour
             .ToArray();
     }
 
+
+    public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
+    {
+        for (int i = 0; i < blockUnits.Length; i++)
+        {
+            if (blockUnits[i] == destroyedUnit)
+            {
+                blockUnits[i] = null;
+                break;
+            }
+        }
+    }
+
     // Called by Player when mining this block
     public void MineNext()
     {

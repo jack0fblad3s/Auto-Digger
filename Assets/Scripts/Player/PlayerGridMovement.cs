@@ -1,5 +1,4 @@
-﻿using System.Linq;
-using UnityEngine;
+﻿using UnityEngine;
 
 [RequireComponent(typeof(BoxCollider))]
 public class PlayerGridController : MonoBehaviour
@@ -19,13 +18,16 @@ public class PlayerGridController : MonoBehaviour
     [Header("Mining")]
     public float reachDistance = 3f;
 
+    [Header("Player Height")]
+    public float standingCenterY = 1f;
+
     void Start()
     {
         // Snap player to edge grid
         Vector3 pos = transform.position;
         transform.position = new Vector3(
             Mathf.Round(pos.x) + 0.5f,
-            pos.y,
+            standingCenterY,
             Mathf.Round(pos.z) + 0.5f
         );
 
@@ -67,6 +69,7 @@ public class PlayerGridController : MonoBehaviour
     void TryMove(Vector3 dir, Quaternion newRot)
     {
         Vector3 desired = targetPosition + dir * gridStep;
+        desired.y = standingCenterY;
 
         BoxCollider col = GetComponent<BoxCollider>();
         Vector3 halfExtents = col.size * 0.5f;
@@ -121,21 +124,41 @@ public class PlayerGridController : MonoBehaviour
     {
         if (blockManager == null) return;
 
-        Vector3 rayOrigin = transform.position + Vector3.up; // middle of player
-        Vector3 rayDir = transform.forward;
+        Vector3Int forward = new Vector3Int(
+            Mathf.RoundToInt(transform.forward.x),
+            0,
+            Mathf.RoundToInt(transform.forward.z)
+        );
 
-        if (Physics.Raycast(rayOrigin, rayDir, out RaycastHit hit, reachDistance))
+        if (forward == Vector3Int.zero) return;
+
+        Vector3 feetPosition = transform.position + Vector3.down;
+        Vector3Int playerGrid = new Vector3Int(
+            Mathf.FloorToInt(transform.position.x),
+            0,
+            Mathf.FloorToInt(transform.position.z)
+        );
+
+        // Mine only the two block layers at the player's body height,
+        // top first (1.5y from feet), then bottom (0.5y from feet).
+        int topLayerY = Mathf.FloorToInt(feetPosition.y + 1.5f);
+        int bottomLayerY = Mathf.FloorToInt(feetPosition.y + 0.5f);
+
+        Vector3Int[] mineOrder =
         {
-            Block block = hit.collider.GetComponent<Block>() ?? hit.collider.GetComponentInParent<Block>();
-            if (block != null)
-            {
-                // Only mine if block is in front of player
-                Vector3 toBlock = block.transform.position - transform.position;
-                if (Vector3.Dot(toBlock.normalized, transform.forward) < 0.5f) return;
+            new Vector3Int(playerGrid.x + forward.x, topLayerY, playerGrid.z + forward.z),
+            new Vector3Int(playerGrid.x + forward.x, bottomLayerY, playerGrid.z + forward.z)
+        };
 
-                // Mine block
-                block.MineNext();
-            }
+        foreach (var targetPos in mineOrder)
+        {
+            Block block = blockManager.GetBlockAt(targetPos);
+            if (block == null) continue;
+
+            if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
+
+            block.MineNext();
+            return;
         }
     }
 }
