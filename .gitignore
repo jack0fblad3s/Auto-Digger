@@ -4,3 +4,10 @@ Logs/
 Obj/
 Build/
 .vs/
+UserSettings/
+*.csproj
+*.sln
+*.unityproj
+*.tmp
+*.user
+*.vsconfig
