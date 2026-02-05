@@ -16,6 +16,8 @@ public class ProceduralBlockManager : MonoBehaviour
 
     // Grid storage
     private Dictionary<Vector3Int, Block> blockGrid = new();
+    private HashSet<Vector3Int> minedPositions = new();
+    private Vector3Int hollowOrigin;
 
     void Start()
     {
@@ -31,15 +33,18 @@ public class ProceduralBlockManager : MonoBehaviour
     // ===================== INITIAL ROOM =====================
     void SpawnInitialRoom()
     {
+        float size = Mathf.Max(0.0001f, blockSize);
         Vector3Int baseGrid = new Vector3Int(
-            Mathf.FloorToInt(player.position.x),
+            Mathf.FloorToInt(player.position.x / size),
             0,
-            Mathf.FloorToInt(player.position.z)
+            Mathf.FloorToInt(player.position.z / size)
         );
 
         int startX = baseGrid.x;
         int startZ = baseGrid.z;
         int startY = 0;
+
+        hollowOrigin = new Vector3Int(startX, startY, startZ);
 
         int endX = startX + hollowX - 1;
         int endY = startY + hollowY - 1;
@@ -73,9 +78,9 @@ public class ProceduralBlockManager : MonoBehaviour
 
         // PLACE PLAYER (1×1×2)
         player.position = new Vector3(
-            startX + 0.5f,
-            1f,
-            startZ + 0.5f
+            (startX + 0.5f) * size,
+            size,
+            (startZ + 0.5f) * size
         );
     }
 
@@ -84,11 +89,12 @@ public class ProceduralBlockManager : MonoBehaviour
     {
         if (blockGrid.ContainsKey(gridPos)) return;
 
-        float worldY = gridPos.y + 0.5f;
+        float size = Mathf.Max(0.0001f, blockSize);
+        float worldY = (gridPos.y + 0.5f) * size;
         Vector3 worldPos = new Vector3(
-            gridPos.x * blockSize,
+            gridPos.x * size,
             worldY,
-            gridPos.z * blockSize
+            gridPos.z * size
         );
 
         GameObject go = Instantiate(prefab, worldPos, Quaternion.identity);
@@ -120,6 +126,7 @@ public class ProceduralBlockManager : MonoBehaviour
 
         Vector3Int gridPos = WorldToGrid(block.transform.position);
         blockGrid.Remove(gridPos);
+        minedPositions.Add(gridPos);
         Destroy(block.gameObject);
     }
 
@@ -144,29 +151,31 @@ public class ProceduralBlockManager : MonoBehaviour
         {
             Vector3Int n = gridPos + dir;
             if (blockGrid.ContainsKey(n)) continue;
+            if (minedPositions.Contains(n)) continue;
             if (IsInsideHollow(n)) continue;
 
             GameObject prefab =
-                (n.y == -1 || n.y == hollowY) ? CeilingFloorBlock : OreBlock;
+                (n.y == hollowOrigin.y - 1 || n.y == hollowOrigin.y + hollowY) ? CeilingFloorBlock : OreBlock;
 
             SpawnBlockAt(n, prefab);
         }
     }
 
     // ===================== HELPERS =====================
-    Vector3Int WorldToGrid(Vector3 world)
+    public Vector3Int WorldToGrid(Vector3 world)
     {
+        float size = Mathf.Max(0.0001f, blockSize);
         return new Vector3Int(
-            Mathf.RoundToInt(world.x / blockSize),
-            Mathf.RoundToInt(world.y / blockSize - 0.5f),
-            Mathf.RoundToInt(world.z / blockSize)
+            Mathf.RoundToInt(world.x / size),
+            Mathf.RoundToInt(world.y / size - 0.5f),
+            Mathf.RoundToInt(world.z / size)
         );
     }
 
     bool IsInsideHollow(Vector3Int pos)
     {
-        return pos.x >= 0 && pos.x < hollowX &&
-               pos.y >= 0 && pos.y < hollowY &&
-               pos.z >= 0 && pos.z < hollowZ;
+        return pos.x >= hollowOrigin.x && pos.x < hollowOrigin.x + hollowX &&
+               pos.y >= hollowOrigin.y && pos.y < hollowOrigin.y + hollowY &&
+               pos.z >= hollowOrigin.z && pos.z < hollowOrigin.z + hollowZ;
     }
 }

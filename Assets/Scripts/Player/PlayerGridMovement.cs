@@ -20,15 +20,19 @@ public class PlayerGridController : MonoBehaviour
 
     [Header("Player Height")]
     public float standingCenterY = 1f;
+    private float effectiveStandingCenterY;
 
     void Start()
     {
         // Snap player to edge grid
         Vector3 pos = transform.position;
+        float size = BlockSize();
+        effectiveStandingCenterY = Mathf.Approximately(standingCenterY, 1f) ? size : standingCenterY;
+
         transform.position = new Vector3(
-            Mathf.Round(pos.x) + 0.5f,
-            standingCenterY,
-            Mathf.Round(pos.z) + 0.5f
+            Mathf.Floor(pos.x / size) * size + (0.5f * size),
+            effectiveStandingCenterY,
+            Mathf.Floor(pos.z / size) * size + (0.5f * size)
         );
 
         targetPosition = transform.position;
@@ -66,13 +70,28 @@ public class PlayerGridController : MonoBehaviour
         }
     }
 
+
+    float BlockSize()
+    {
+        if (blockManager == null) return 1f;
+        return Mathf.Max(0.0001f, blockManager.blockSize);
+    }
+
+    float StepDistance()
+    {
+        return gridStep * BlockSize();
+    }
+
     void TryMove(Vector3 dir, Quaternion newRot)
     {
-        Vector3 desired = targetPosition + dir * gridStep;
-        desired.y = standingCenterY;
+        if (blockManager == null) return;
+
+        Vector3 desired = targetPosition + dir * StepDistance();
+        desired.y = effectiveStandingCenterY;
 
         BoxCollider col = GetComponent<BoxCollider>();
         Vector3 halfExtents = col.size * 0.5f;
+        Vector3 scaledCenter = Vector3.Scale(col.center, transform.lossyScale);
         Vector3[] checkPoints = new Vector3[]
         {
             new Vector3(halfExtents.x, 0, halfExtents.z),
@@ -83,13 +102,10 @@ public class PlayerGridController : MonoBehaviour
 
         foreach (var pt in checkPoints)
         {
-            Vector3 check = new Vector3(
-                Mathf.FloorToInt(desired.x + pt.x),
-                Mathf.FloorToInt(desired.y),
-                Mathf.FloorToInt(desired.z + pt.z)
-            );
+            Vector3 probe = desired + scaledCenter + Vector3.Scale(pt, transform.lossyScale);
+            Vector3Int check = blockManager.WorldToGrid(probe);
 
-            if (blockManager.IsOccupied(Vector3Int.RoundToInt(check)))
+            if (blockManager.IsOccupied(check))
                 return; // blocked
         }
 
@@ -132,22 +148,15 @@ public class PlayerGridController : MonoBehaviour
 
         if (forward == Vector3Int.zero) return;
 
-        Vector3 feetPosition = transform.position + Vector3.down;
-        Vector3Int playerGrid = new Vector3Int(
-            Mathf.FloorToInt(transform.position.x),
-            0,
-            Mathf.FloorToInt(transform.position.z)
-        );
-
-        // Mine only the two block layers at the player's body height,
-        // top first (1.5y from feet), then bottom (0.5y from feet).
-        int topLayerY = Mathf.FloorToInt(feetPosition.y + 1.5f);
-        int bottomLayerY = Mathf.FloorToInt(feetPosition.y + 0.5f);
+        float size = BlockSize();
+        Vector3 stepOffset = new Vector3(forward.x, 0f, forward.z) * StepDistance();
+        Vector3 topProbe = transform.position + stepOffset + new Vector3(0f, 0.5f * size, 0f);
+        Vector3 bottomProbe = transform.position + stepOffset + new Vector3(0f, -0.5f * size, 0f);
 
         Vector3Int[] mineOrder =
         {
-            new Vector3Int(playerGrid.x + forward.x, topLayerY, playerGrid.z + forward.z),
-            new Vector3Int(playerGrid.x + forward.x, bottomLayerY, playerGrid.z + forward.z)
+            blockManager.WorldToGrid(topProbe),
+            blockManager.WorldToGrid(bottomProbe)
         };
 
         foreach (var targetPos in mineOrder)

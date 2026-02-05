@@ -11,12 +11,14 @@ public class Block : MonoBehaviour
 
     void Awake()
     {
-        // Auto-collect BlockUnits from children
+        // Auto-collect BlockUnits from children in strict visual order:
+        // top-left, top-right, bottom-left, bottom-right.
         blockUnits = GetComponentsInChildren<BlockUnit>()
-            .OrderBy(u => u.slotIndex) // 0 TL, 1 TR, 2 BL, 3 BR
+            .OrderByDescending(u => u.transform.localPosition.y)
+            .ThenBy(u => u.transform.localPosition.x)
+            .ThenBy(u => u.slotIndex)
             .ToArray();
     }
-
 
     public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
     {
@@ -43,9 +45,13 @@ public class Block : MonoBehaviour
         // If all units are gone, destroy block and spawn neighbors
         if (blockUnits.All(u => u == null || !u.IsMineable()))
         {
-            if (manager != null)
-                manager.SpawnNeighbors(this);
+            if (manager == null)
+            {
+                Debug.LogWarning("Block has no manager assigned during removal.", this);
+                return;
+            }
 
+            manager.SpawnNeighbors(this);
             manager.RemoveBlock(this);
         }
     }
