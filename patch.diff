@@ -1,12 +1,288 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/Assets/Scripts/Blocks/Block.cs b/Assets/Scripts/Blocks/Block.cs
+index 6efce46449b1b2fb0666d5a33ad5d1a0a5c855c7..1dac86d743883b68732476e28168fa3256af012e 100644
+--- a/Assets/Scripts/Blocks/Block.cs
++++ b/Assets/Scripts/Blocks/Block.cs
+@@ -1,52 +1,58 @@
+ ﻿using System.Linq;
+ using UnityEngine;
+ 
+ public class Block : MonoBehaviour
+ {
+     [HideInInspector]
+     public ProceduralBlockManager manager;
+ 
+     // The 4 mineable sub-blocks (TL, TR, BL, BR)
+     public BlockUnit[] blockUnits;
+ 
+     void Awake()
+     {
+-        // Auto-collect BlockUnits from children
++        // Auto-collect BlockUnits from children in strict visual order:
++        // top-left, top-right, bottom-left, bottom-right.
+         blockUnits = GetComponentsInChildren<BlockUnit>()
+-            .OrderBy(u => u.slotIndex) // 0 TL, 1 TR, 2 BL, 3 BR
++            .OrderByDescending(u => u.transform.localPosition.y)
++            .ThenBy(u => u.transform.localPosition.x)
++            .ThenBy(u => u.slotIndex)
+             .ToArray();
+     }
+ 
+-
+     public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
+     {
+         for (int i = 0; i < blockUnits.Length; i++)
+         {
+             if (blockUnits[i] == destroyedUnit)
+             {
+                 blockUnits[i] = null;
+                 break;
+             }
+         }
+     }
+ 
+     // Called by Player when mining this block
+     public void MineNext()
+     {
+         // Find next mineable unit in order
+         BlockUnit unit = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
+         if (unit == null)
+             return;
+ 
+         unit.Mine();
+ 
+         // If all units are gone, destroy block and spawn neighbors
+         if (blockUnits.All(u => u == null || !u.IsMineable()))
+         {
+-            if (manager != null)
+-                manager.SpawnNeighbors(this);
++            if (manager == null)
++            {
++                Debug.LogWarning("Block has no manager assigned during removal.", this);
++                return;
++            }
+ 
++            manager.SpawnNeighbors(this);
+             manager.RemoveBlock(this);
+         }
+     }
+ }
+ 
+EOF
+)
+
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/Assets/Scripts/Blocks/ProceduralBlockManager.cs b/Assets/Scripts/Blocks/ProceduralBlockManager.cs
+index f8b76d1ca886e315e91c679f07179b9ae692993e..305218e1c5af9bb06d960afebe5cc171d5f4d349 100644
+--- a/Assets/Scripts/Blocks/ProceduralBlockManager.cs
++++ b/Assets/Scripts/Blocks/ProceduralBlockManager.cs
+@@ -1,172 +1,181 @@
+ ﻿using System.Collections.Generic;
+ using UnityEngine;
+ 
+ public class ProceduralBlockManager : MonoBehaviour
+ {
+     [Header("References")]
+     public GameObject OreBlock;
+     public GameObject CeilingFloorBlock;
+     public Transform player;
+ 
+     [Header("Grid Settings")]
+     public int hollowX = 8;
+     public int hollowY = 3;
+     public int hollowZ = 8;
+     public float blockSize = 1f;
+ 
+     // Grid storage
+     private Dictionary<Vector3Int, Block> blockGrid = new();
++    private HashSet<Vector3Int> minedPositions = new();
++    private Vector3Int hollowOrigin;
+ 
+     void Start()
+     {
+         if (OreBlock == null || CeilingFloorBlock == null || player == null)
+         {
+             Debug.LogError("Assign OreBlock, CeilingFloorBlock, and Player!");
+             return;
+         }
+ 
+         SpawnInitialRoom();
+     }
+ 
+     // ===================== INITIAL ROOM =====================
+     void SpawnInitialRoom()
+     {
++        float size = Mathf.Max(0.0001f, blockSize);
+         Vector3Int baseGrid = new Vector3Int(
+-            Mathf.FloorToInt(player.position.x),
++            Mathf.FloorToInt(player.position.x / size),
+             0,
+-            Mathf.FloorToInt(player.position.z)
++            Mathf.FloorToInt(player.position.z / size)
+         );
+ 
+         int startX = baseGrid.x;
+         int startZ = baseGrid.z;
+         int startY = 0;
+ 
++        hollowOrigin = new Vector3Int(startX, startY, startZ);
++
+         int endX = startX + hollowX - 1;
+         int endY = startY + hollowY - 1;
+         int endZ = startZ + hollowZ - 1;
+ 
+         // FLOOR
+         for (int x = startX - 1; x <= endX + 1; x++)
+             for (int z = startZ - 1; z <= endZ + 1; z++)
+                 SpawnBlockAt(new Vector3Int(x, -1, z), CeilingFloorBlock);
+ 
+         // WALLS
+         for (int y = startY; y <= endY; y++)
+         {
+             for (int z = startZ - 1; z <= endZ + 1; z++)
+             {
+                 SpawnBlockAt(new Vector3Int(startX - 1, y, z), OreBlock);
+                 SpawnBlockAt(new Vector3Int(endX + 1, y, z), OreBlock);
+             }
+ 
+             for (int x = startX; x <= endX; x++)
+             {
+                 SpawnBlockAt(new Vector3Int(x, y, startZ - 1), OreBlock);
+                 SpawnBlockAt(new Vector3Int(x, y, endZ + 1), OreBlock);
+             }
+         }
+ 
+         // CEILING
+         for (int x = startX - 1; x <= endX + 1; x++)
+             for (int z = startZ - 1; z <= endZ + 1; z++)
+                 SpawnBlockAt(new Vector3Int(x, endY + 1, z), CeilingFloorBlock);
+ 
+         // PLACE PLAYER (1×1×2)
+         player.position = new Vector3(
+-            startX + 0.5f,
+-            1f,
+-            startZ + 0.5f
++            (startX + 0.5f) * size,
++            size,
++            (startZ + 0.5f) * size
+         );
+     }
+ 
+     // ===================== BLOCK SPAWN =====================
+     public void SpawnBlockAt(Vector3Int gridPos, GameObject prefab)
+     {
+         if (blockGrid.ContainsKey(gridPos)) return;
+ 
+-        float worldY = gridPos.y + 0.5f;
++        float size = Mathf.Max(0.0001f, blockSize);
++        float worldY = (gridPos.y + 0.5f) * size;
+         Vector3 worldPos = new Vector3(
+-            gridPos.x * blockSize,
++            gridPos.x * size,
+             worldY,
+-            gridPos.z * blockSize
++            gridPos.z * size
+         );
+ 
+         GameObject go = Instantiate(prefab, worldPos, Quaternion.identity);
+         Block block = go.GetComponent<Block>();
+ 
+         if (block != null)
+         {
+             block.manager = this;
+             blockGrid[gridPos] = block;
+         }
+     }
+ 
+     // ===================== GRID QUERIES =====================
+     public bool IsOccupied(Vector3Int gridPos)
+     {
+         return blockGrid.ContainsKey(gridPos);
+     }
+ 
+     public Block GetBlockAt(Vector3Int gridPos)
+     {
+         blockGrid.TryGetValue(gridPos, out Block block);
+         return block;
+     }
+ 
+     // ===================== REMOVAL =====================
+     public void RemoveBlock(Block block)
+     {
+         if (block == null) return;
+ 
+         Vector3Int gridPos = WorldToGrid(block.transform.position);
+         blockGrid.Remove(gridPos);
++        minedPositions.Add(gridPos);
+         Destroy(block.gameObject);
+     }
+ 
+     // ===================== NEIGHBOR SPAWN =====================
+     public void SpawnNeighbors(Block minedBlock)
+     {
+         if (minedBlock == null) return;
+ 
+         Vector3Int gridPos = WorldToGrid(minedBlock.transform.position);
+ 
+         Vector3Int[] dirs =
+         {
+             Vector3Int.left,
+             Vector3Int.right,
+             Vector3Int.forward,
+             Vector3Int.back,
+             Vector3Int.up,
+             Vector3Int.down
+         };
+ 
+         foreach (var dir in dirs)
+         {
+             Vector3Int n = gridPos + dir;
+             if (blockGrid.ContainsKey(n)) continue;
++            if (minedPositions.Contains(n)) continue;
+             if (IsInsideHollow(n)) continue;
+ 
+             GameObject prefab =
+-                (n.y == -1 || n.y == hollowY) ? CeilingFloorBlock : OreBlock;
++                (n.y == hollowOrigin.y - 1 || n.y == hollowOrigin.y + hollowY) ? CeilingFloorBlock : OreBlock;
+ 
+             SpawnBlockAt(n, prefab);
+         }
+     }
+ 
+     // ===================== HELPERS =====================
+-    Vector3Int WorldToGrid(Vector3 world)
++    public Vector3Int WorldToGrid(Vector3 world)
+     {
++        float size = Mathf.Max(0.0001f, blockSize);
+         return new Vector3Int(
+-            Mathf.RoundToInt(world.x / blockSize),
+-            Mathf.RoundToInt(world.y / blockSize - 0.5f),
+-            Mathf.RoundToInt(world.z / blockSize)
++            Mathf.RoundToInt(world.x / size),
++            Mathf.RoundToInt(world.y / size - 0.5f),
++            Mathf.RoundToInt(world.z / size)
+         );
+     }
+ 
+     bool IsInsideHollow(Vector3Int pos)
+     {
+-        return pos.x >= 0 && pos.x < hollowX &&
+-               pos.y >= 0 && pos.y < hollowY &&
+-               pos.z >= 0 && pos.z < hollowZ;
++        return pos.x >= hollowOrigin.x && pos.x < hollowOrigin.x + hollowX &&
++               pos.y >= hollowOrigin.y && pos.y < hollowOrigin.y + hollowY &&
++               pos.z >= hollowOrigin.z && pos.z < hollowOrigin.z + hollowZ;
+     }
+ }
+ 
+EOF
+) (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/Assets/Scripts/Player/PlayerGridMovement.cs b/Assets/Scripts/Player/PlayerGridMovement.cs
-index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d30eba7a0 100644
+index 0ad06116a2df02912f3ca80205c6b248e1c4ab28..6c1ed4aa9eb28ae0153c2868624cb25db9f3a1a4 100644
 --- a/Assets/Scripts/Player/PlayerGridMovement.cs
 +++ b/Assets/Scripts/Player/PlayerGridMovement.cs
-@@ -1,94 +1,97 @@
--﻿using System.Linq;
--using UnityEngine;
-+﻿using UnityEngine;
+@@ -1,164 +1,173 @@
+ ﻿using UnityEngine;
  
  [RequireComponent(typeof(BoxCollider))]
  public class PlayerGridController : MonoBehaviour
@@ -26,18 +302,24 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d
      [Header("Mining")]
      public float reachDistance = 3f;
  
-+    [Header("Player Height")]
-+    public float standingCenterY = 1f;
-+
+     [Header("Player Height")]
+     public float standingCenterY = 1f;
++    private float effectiveStandingCenterY;
+ 
      void Start()
      {
          // Snap player to edge grid
          Vector3 pos = transform.position;
++        float size = BlockSize();
++        effectiveStandingCenterY = Mathf.Approximately(standingCenterY, 1f) ? size : standingCenterY;
++
          transform.position = new Vector3(
-             Mathf.Round(pos.x) + 0.5f,
--            pos.y,
-+            standingCenterY,
-             Mathf.Round(pos.z) + 0.5f
+-            Mathf.Round(pos.x) + 0.5f,
+-            standingCenterY,
+-            Mathf.Round(pos.z) + 0.5f
++            Mathf.Floor(pos.x / size) * size + (0.5f * size),
++            effectiveStandingCenterY,
++            Mathf.Floor(pos.z / size) * size + (0.5f * size)
          );
  
          targetPosition = transform.position;
@@ -75,13 +357,30 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d
          }
      }
  
++
++    float BlockSize()
++    {
++        if (blockManager == null) return 1f;
++        return Mathf.Max(0.0001f, blockManager.blockSize);
++    }
++
++    float StepDistance()
++    {
++        return gridStep * BlockSize();
++    }
++
      void TryMove(Vector3 dir, Quaternion newRot)
      {
-         Vector3 desired = targetPosition + dir * gridStep;
-+        desired.y = standingCenterY;
+-        Vector3 desired = targetPosition + dir * gridStep;
+-        desired.y = standingCenterY;
++        if (blockManager == null) return;
++
++        Vector3 desired = targetPosition + dir * StepDistance();
++        desired.y = effectiveStandingCenterY;
  
          BoxCollider col = GetComponent<BoxCollider>();
          Vector3 halfExtents = col.size * 0.5f;
++        Vector3 scaledCenter = Vector3.Scale(col.center, transform.lossyScale);
          Vector3[] checkPoints = new Vector3[]
          {
              new Vector3(halfExtents.x, 0, halfExtents.z),
@@ -92,19 +391,25 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d
  
          foreach (var pt in checkPoints)
          {
-             Vector3 check = new Vector3(
-                 Mathf.FloorToInt(desired.x + pt.x),
-                 Mathf.FloorToInt(desired.y),
-                 Mathf.FloorToInt(desired.z + pt.z)
-             );
+-            Vector3 check = new Vector3(
+-                Mathf.FloorToInt(desired.x + pt.x),
+-                Mathf.FloorToInt(desired.y),
+-                Mathf.FloorToInt(desired.z + pt.z)
+-            );
++            Vector3 probe = desired + scaledCenter + Vector3.Scale(pt, transform.lossyScale);
++            Vector3Int check = blockManager.WorldToGrid(probe);
  
-             if (blockManager.IsOccupied(Vector3Int.RoundToInt(check)))
+-            if (blockManager.IsOccupied(Vector3Int.RoundToInt(check)))
++            if (blockManager.IsOccupied(check))
                  return; // blocked
          }
  
          targetPosition = desired;
          targetRotation = newRot;
-@@ -99,43 +102,69 @@ public class PlayerGridController : MonoBehaviour
+         isMoving = true;
+     }
+ 
+     void SmoothMove()
      {
          if (!isMoving) return;
          transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
@@ -130,61 +435,144 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d
      {
          if (blockManager == null) return;
  
--        Vector3 rayOrigin = transform.position + Vector3.up; // middle of player
--        Vector3 rayDir = transform.forward;
-+        Vector3Int forward = new Vector3Int(
-+            Mathf.RoundToInt(transform.forward.x),
-+            0,
-+            Mathf.RoundToInt(transform.forward.z)
-+        );
-+
-+        if (forward == Vector3Int.zero) return;
-+
-+        BoxCollider col = GetComponent<BoxCollider>();
-+        float feetY = col.bounds.min.y;
-+
-+        // 0.5y and 1.5y from feet should be mineable (bottom row + top row).
-+        int bottomLayerY = Mathf.FloorToInt(feetY + 0.5f);
-+        int topLayerY = Mathf.FloorToInt(feetY + 1.5f);
-+
-+        Vector3Int playerGrid = new Vector3Int(
-+            Mathf.FloorToInt(transform.position.x),
-+            0,
-+            Mathf.FloorToInt(transform.position.z)
-+        );
-+
-+        Vector3Int frontGrid = playerGrid + forward;
+         Vector3Int forward = new Vector3Int(
+             Mathf.RoundToInt(transform.forward.x),
+             0,
+             Mathf.RoundToInt(transform.forward.z)
+         );
  
--        if (Physics.Raycast(rayOrigin, rayDir, out RaycastHit hit, reachDistance))
-+        // Mine only the two body-height blocks directly in front of the player.
-+        Vector3Int[] mineOrder =
-         {
--            Block block = hit.collider.GetComponent<Block>() ?? hit.collider.GetComponentInParent<Block>();
--            if (block != null)
--            {
--                // Only mine if block is in front of player
--                Vector3 toBlock = block.transform.position - transform.position;
--                if (Vector3.Dot(toBlock.normalized, transform.forward) < 0.5f) return;
+         if (forward == Vector3Int.zero) return;
+ 
+-        Vector3 feetPosition = transform.position + Vector3.down;
+-        Vector3Int playerGrid = new Vector3Int(
+-            Mathf.FloorToInt(transform.position.x),
+-            0,
+-            Mathf.FloorToInt(transform.position.z)
+-        );
 -
--                // Mine block
--                block.MineNext();
--            }
-+            new Vector3Int(frontGrid.x, topLayerY, frontGrid.z),
-+            new Vector3Int(frontGrid.x, bottomLayerY, frontGrid.z)
-+        };
-+
-+        for (int i = 0; i < mineOrder.Length; i++)
-+        {
-+            if (i > 0 && mineOrder[i] == mineOrder[i - 1])
-+                continue;
-+
-+            Block block = blockManager.GetBlockAt(mineOrder[i]);
-+            if (block == null) continue;
-+            if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
-+
-+            block.MineNext();
-+            return;
+-        // Mine only the two block layers at the player's body height,
+-        // top first (1.5y from feet), then bottom (0.5y from feet).
+-        int topLayerY = Mathf.FloorToInt(feetPosition.y + 1.5f);
+-        int bottomLayerY = Mathf.FloorToInt(feetPosition.y + 0.5f);
++        float size = BlockSize();
++        Vector3 stepOffset = new Vector3(forward.x, 0f, forward.z) * StepDistance();
++        Vector3 topProbe = transform.position + stepOffset + new Vector3(0f, 0.5f * size, 0f);
++        Vector3 bottomProbe = transform.position + stepOffset + new Vector3(0f, -0.5f * size, 0f);
+ 
+         Vector3Int[] mineOrder =
+         {
+-            new Vector3Int(playerGrid.x + forward.x, topLayerY, playerGrid.z + forward.z),
+-            new Vector3Int(playerGrid.x + forward.x, bottomLayerY, playerGrid.z + forward.z)
++            blockManager.WorldToGrid(topProbe),
++            blockManager.WorldToGrid(bottomProbe)
+         };
+ 
+         foreach (var targetPos in mineOrder)
+         {
+             Block block = blockManager.GetBlockAt(targetPos);
+             if (block == null) continue;
+ 
+             if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
+ 
+             block.MineNext();
+             return;
          }
+     }
+ }
+ 
+EOF
+)
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/Assets/Scripts/Player/PlayerMine.cs b/Assets/Scripts/Player/PlayerMine.cs
+index 57c983a68f517f25b615c6663734d5af04707fae..2ec61f74424fe5dac749aee64e83551c6862ed8e 100644
+--- a/Assets/Scripts/Player/PlayerMine.cs
++++ b/Assets/Scripts/Player/PlayerMine.cs
+@@ -1,70 +1,43 @@
+ ﻿using UnityEngine;
+ 
+ public class PlayerMine : MonoBehaviour
+ {
+     public float reachDistance = 3f;
+     public ProceduralBlockManager blockManager;
+ 
++    void Awake()
++    {
++        if (GetComponent<PlayerGridController>() != null)
++        {
++            // Grid controller already handles mining input.
++            enabled = false;
++        }
++    }
++
+     void Update()
+     {
+         if (Input.GetMouseButtonDown(0))
+         {
+             MineBlock();
+         }
+     }
+ 
+     void MineBlock()
+     {
+         if (blockManager == null) return;
+ 
+-        // Player midpoint
+-        Vector3 rayOrigin = transform.position + Vector3.up; // middle of 2-high player
++        Vector3 rayOrigin = transform.position + Vector3.up;
+         Vector3 rayDir = transform.forward;
+ 
+-        // Raycast against blocks in front
+-        if (Physics.Raycast(rayOrigin, rayDir, out RaycastHit hit, reachDistance))
+-        {
+-            // Find the nearest Block in the hit object or parent
+-            Block block = hit.collider.GetComponent<Block>();
+-            if (block == null) block = hit.collider.GetComponentInParent<Block>();
+-
+-            if (block == null) return;
+-
+-            // Ensure block is in front of player
+-            Vector3 toBlock = block.transform.position - transform.position;
+-            if (Vector3.Dot(toBlock, transform.forward) <= 0) return;
++        if (!Physics.Raycast(rayOrigin, rayDir, out RaycastHit hit, reachDistance))
++            return;
+ 
+-            // Snap hit point to grid
+-            Vector3Int gridPos = new Vector3Int(
+-                Mathf.FloorToInt(hit.point.x),
+-                Mathf.FloorToInt(hit.point.y),
+-                Mathf.FloorToInt(hit.point.z)
+-            );
++        Block block = hit.collider.GetComponent<Block>() ?? hit.collider.GetComponentInParent<Block>();
++        if (block == null) return;
+ 
+-            // Get BlockUnit to mine
+-            BlockUnit targetUnit = block.blockUnits.Length > 0 ? block.blockUnits[0] : null;
+-            if (targetUnit != null)
+-            {
+-                targetUnit.Mine(); // Mine that cube
+-            }
++        Vector3 toBlock = block.transform.position - transform.position;
++        if (Vector3.Dot(toBlock, transform.forward) <= 0) return;
+ 
+-            // After mining, check if block has any children left
+-            bool hasUnitsLeft = false;
+-            foreach (var u in block.blockUnits)
+-            {
+-                if (u != null)
+-                {
+-                    hasUnitsLeft = true;
+-                    break;
+-                }
+-            }
+-
+-            if (!hasUnitsLeft)
+-            {
+-                // Destroy block and spawn neighbors
+-                blockManager.SpawnNeighbors(block);
+-                Destroy(block.gameObject);
+-            }
+-        }
++        block.MineNext();
      }
  }
  
