@@ -1,67 +1,6 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/Assets/Scripts/Blocks/Block.cs b/Assets/Scripts/Blocks/Block.cs
-index c6a9448ddecd1dcca66a80111ba27ac06e39a05b..6efce46449b1b2fb0666d5a33ad5d1a0a5c855c7 100644
---- a/Assets/Scripts/Blocks/Block.cs
-+++ b/Assets/Scripts/Blocks/Block.cs
-@@ -1,39 +1,52 @@
- ﻿using System.Linq;
- using UnityEngine;
- 
- public class Block : MonoBehaviour
- {
-     [HideInInspector]
-     public ProceduralBlockManager manager;
- 
-     // The 4 mineable sub-blocks (TL, TR, BL, BR)
-     public BlockUnit[] blockUnits;
- 
-     void Awake()
-     {
-         // Auto-collect BlockUnits from children
-         blockUnits = GetComponentsInChildren<BlockUnit>()
-             .OrderBy(u => u.slotIndex) // 0 TL, 1 TR, 2 BL, 3 BR
-             .ToArray();
-     }
- 
-+
-+    public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
-+    {
-+        for (int i = 0; i < blockUnits.Length; i++)
-+        {
-+            if (blockUnits[i] == destroyedUnit)
-+            {
-+                blockUnits[i] = null;
-+                break;
-+            }
-+        }
-+    }
-+
-     // Called by Player when mining this block
-     public void MineNext()
-     {
-         // Find next mineable unit in order
-         BlockUnit unit = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
-         if (unit == null)
-             return;
- 
-         unit.Mine();
- 
-         // If all units are gone, destroy block and spawn neighbors
-         if (blockUnits.All(u => u == null || !u.IsMineable()))
-         {
-             if (manager != null)
-                 manager.SpawnNeighbors(this);
- 
-             manager.RemoveBlock(this);
-         }
-     }
- }
- 
-EOF
-)
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/Assets/Scripts/Player/PlayerGridMovement.cs b/Assets/Scripts/Player/PlayerGridMovement.cs
-index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..0ad06116a2df02912f3ca80205c6b248e1c4ab28 100644
+index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..538c856c799cbabf2e2bb217dd2f110d30eba7a0 100644
 --- a/Assets/Scripts/Player/PlayerGridMovement.cs
 +++ b/Assets/Scripts/Player/PlayerGridMovement.cs
 @@ -1,94 +1,97 @@
@@ -165,7 +104,7 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..0ad06116a2df02912f3ca80205c6b248
  
          targetPosition = desired;
          targetRotation = newRot;
-@@ -99,43 +102,63 @@ public class PlayerGridController : MonoBehaviour
+@@ -99,43 +102,69 @@ public class PlayerGridController : MonoBehaviour
      {
          if (!isMoving) return;
          transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
@@ -201,19 +140,23 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..0ad06116a2df02912f3ca80205c6b248
 +
 +        if (forward == Vector3Int.zero) return;
 +
-+        Vector3 feetPosition = transform.position + Vector3.down;
++        BoxCollider col = GetComponent<BoxCollider>();
++        float feetY = col.bounds.min.y;
++
++        // 0.5y and 1.5y from feet should be mineable (bottom row + top row).
++        int bottomLayerY = Mathf.FloorToInt(feetY + 0.5f);
++        int topLayerY = Mathf.FloorToInt(feetY + 1.5f);
++
 +        Vector3Int playerGrid = new Vector3Int(
 +            Mathf.FloorToInt(transform.position.x),
 +            0,
 +            Mathf.FloorToInt(transform.position.z)
 +        );
 +
-+        // Mine only the two block layers at the player's body height,
-+        // top first (1.5y from feet), then bottom (0.5y from feet).
-+        int topLayerY = Mathf.FloorToInt(feetPosition.y + 1.5f);
-+        int bottomLayerY = Mathf.FloorToInt(feetPosition.y + 0.5f);
++        Vector3Int frontGrid = playerGrid + forward;
  
 -        if (Physics.Raycast(rayOrigin, rayDir, out RaycastHit hit, reachDistance))
++        // Mine only the two body-height blocks directly in front of the player.
 +        Vector3Int[] mineOrder =
          {
 -            Block block = hit.collider.GetComponent<Block>() ?? hit.collider.GetComponentInParent<Block>();
@@ -226,15 +169,17 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..0ad06116a2df02912f3ca80205c6b248
 -                // Mine block
 -                block.MineNext();
 -            }
-+            new Vector3Int(playerGrid.x + forward.x, topLayerY, playerGrid.z + forward.z),
-+            new Vector3Int(playerGrid.x + forward.x, bottomLayerY, playerGrid.z + forward.z)
++            new Vector3Int(frontGrid.x, topLayerY, frontGrid.z),
++            new Vector3Int(frontGrid.x, bottomLayerY, frontGrid.z)
 +        };
 +
-+        foreach (var targetPos in mineOrder)
++        for (int i = 0; i < mineOrder.Length; i++)
 +        {
-+            Block block = blockManager.GetBlockAt(targetPos);
-+            if (block == null) continue;
++            if (i > 0 && mineOrder[i] == mineOrder[i - 1])
++                continue;
 +
++            Block block = blockManager.GetBlockAt(mineOrder[i]);
++            if (block == null) continue;
 +            if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
 +
 +            block.MineNext();
@@ -245,5 +190,3 @@ index b0956f4ae86c5ba8aa908f9583fda7e42c3a51fc..0ad06116a2df02912f3ca80205c6b248
  
 EOF
 )
-
-
