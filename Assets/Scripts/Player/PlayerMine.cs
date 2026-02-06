@@ -17,9 +17,7 @@ public class PlayerMine : MonoBehaviour
     void Update()
     {
         if (Input.GetMouseButtonDown(0))
-        {
             MineBlock();
-        }
     }
 
     void MineBlock()

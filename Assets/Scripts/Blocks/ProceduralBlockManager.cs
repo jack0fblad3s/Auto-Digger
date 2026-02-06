@@ -108,10 +108,7 @@ public class ProceduralBlockManager : MonoBehaviour
     }
 
     // ===================== GRID QUERIES =====================
-    public bool IsOccupied(Vector3Int gridPos)
-    {
-        return blockGrid.ContainsKey(gridPos);
-    }
+    public bool IsOccupied(Vector3Int gridPos) => blockGrid.ContainsKey(gridPos);
 
     public Block GetBlockAt(Vector3Int gridPos)
     {

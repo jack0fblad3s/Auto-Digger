@@ -24,18 +24,17 @@ public class PlayerGridController : MonoBehaviour
 
     void Start()
     {
-        // Snap player to edge grid
-        Vector3 pos = transform.position;
         float size = BlockSize();
         effectiveStandingCenterY = Mathf.Approximately(standingCenterY, 1f) ? size : standingCenterY;
 
-        transform.position = new Vector3(
-            Mathf.Floor(pos.x / size) * size + (0.5f * size),
+        // Snap player to grid
+        targetPosition = new Vector3(
+            Mathf.Floor(transform.position.x / size) * size + 0.5f * size,
             effectiveStandingCenterY,
-            Mathf.Floor(pos.z / size) * size + (0.5f * size)
+            Mathf.Floor(transform.position.z / size) * size + 0.5f * size
         );
 
-        targetPosition = transform.position;
+        transform.position = targetPosition;
         targetRotation = transform.rotation;
     }
 
@@ -44,6 +43,9 @@ public class PlayerGridController : MonoBehaviour
         HandleInput();
         SmoothMove();
         SmoothRotate();
+
+        if (Input.GetMouseButtonDown(0))
+            MineBlock();
     }
 
     void HandleInput()
@@ -70,17 +72,9 @@ public class PlayerGridController : MonoBehaviour
         }
     }
 
+    float BlockSize() => blockManager != null ? Mathf.Max(0.0001f, blockManager.blockSize) : 1f;
 
-    float BlockSize()
-    {
-        if (blockManager == null) return 1f;
-        return Mathf.Max(0.0001f, blockManager.blockSize);
-    }
-
-    float StepDistance()
-    {
-        return gridStep * BlockSize();
-    }
+    float StepDistance() => gridStep * BlockSize();
 
     void TryMove(Vector3 dir, Quaternion newRot)
     {
@@ -92,7 +86,8 @@ public class PlayerGridController : MonoBehaviour
         BoxCollider col = GetComponent<BoxCollider>();
         Vector3 halfExtents = col.size * 0.5f;
         Vector3 scaledCenter = Vector3.Scale(col.center, transform.lossyScale);
-        Vector3[] checkPoints = new Vector3[]
+
+        Vector3[] checkPoints =
         {
             new Vector3(halfExtents.x, 0, halfExtents.z),
             new Vector3(-halfExtents.x, 0, halfExtents.z),
@@ -130,44 +125,67 @@ public class PlayerGridController : MonoBehaviour
         transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
     }
 
-    void FixedUpdate()
-    {
-        if (Input.GetMouseButtonDown(0))
-            MineBlock();
-    }
-
     void MineBlock()
     {
         if (blockManager == null) return;
 
-        Vector3Int forward = new Vector3Int(
+        float size = BlockSize();
+
+        // Forward snapped to grid
+        Vector3Int forwardGrid = new Vector3Int(
             Mathf.RoundToInt(transform.forward.x),
             0,
             Mathf.RoundToInt(transform.forward.z)
         );
+        if (forwardGrid == Vector3Int.zero) return;
 
-        if (forward == Vector3Int.zero) return;
+        Vector3Int playerGrid = blockManager.WorldToGrid(targetPosition);
+        int maxDepth = Mathf.CeilToInt(reachDistance / StepDistance());
 
-        float size = BlockSize();
-        Vector3 stepOffset = new Vector3(forward.x, 0f, forward.z) * StepDistance();
-        Vector3 topProbe = transform.position + stepOffset + new Vector3(0f, 0.5f * size, 0f);
-        Vector3 bottomProbe = transform.position + stepOffset + new Vector3(0f, -0.5f * size, 0f);
-
-        Vector3Int[] mineOrder =
+        // Iterate depth until we find a block to mine
+        for (int depth = 1; depth <= maxDepth; depth++)
         {
-            blockManager.WorldToGrid(topProbe),
-            blockManager.WorldToGrid(bottomProbe)
-        };
+            Vector3 blockCenter = targetPosition + new Vector3(forwardGrid.x, 0, forwardGrid.z) * StepDistance() * depth;
 
-        foreach (var targetPos in mineOrder)
-        {
-            Block block = blockManager.GetBlockAt(targetPos);
-            if (block == null) continue;
+            // Sub-unit offsets for **TL → TR → BL → BR**
+            Vector3 right = transform.right * 0.25f * size;
+            Vector3 up = Vector3.up * 0.25f * size;
 
-            if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
+            Vector3[] subUnitProbes = new Vector3[]
+            {
+                blockCenter + up - right, // TL
+                blockCenter + up + right, // TR
+                blockCenter - up - right, // BL
+                blockCenter - up + right  // BR
+            };
 
-            block.MineNext();
-            return;
+            // Mine **only the first available sub-unit**
+            foreach (var probe in subUnitProbes)
+            {
+                Vector3Int gridPos = blockManager.WorldToGrid(probe);
+                Block block = blockManager.GetBlockAt(gridPos);
+                if (block == null) continue;
+                if (Vector3.Distance(transform.position, block.transform.position) > reachDistance) continue;
+
+                block.MineNext(); // Mine 1 sub-block per click
+                return;        // STOP after mining one
+            }
+
+            // Only move deeper **if all 4 sub-blocks were gone**
+            bool layerEmpty = true;
+            foreach (var probe in subUnitProbes)
+            {
+                Vector3Int gridPos = blockManager.WorldToGrid(probe);
+                Block block = blockManager.GetBlockAt(gridPos);
+                if (block != null && block.blockUnits != null && block.blockUnits.Length > 0)
+                {
+                    layerEmpty = false;
+                    break;
+                }
+            }
+
+            if (!layerEmpty)
+                break; // stop if current layer still has sub-blocks
         }
     }
 }

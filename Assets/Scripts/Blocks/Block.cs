@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class Block : MonoBehaviour
@@ -6,43 +7,58 @@ public class Block : MonoBehaviour
     [HideInInspector]
     public ProceduralBlockManager manager;
 
-    // The 4 mineable sub-blocks (TL, TR, BL, BR)
     public BlockUnit[] blockUnits;
 
     void Awake()
     {
-        // Auto-collect BlockUnits from children in strict visual order:
-        // top-left, top-right, bottom-left, bottom-right.
-        blockUnits = GetComponentsInChildren<BlockUnit>()
-            .OrderByDescending(u => u.transform.localPosition.y)
-            .ThenBy(u => u.transform.localPosition.x)
-            .ThenBy(u => u.slotIndex)
-            .ToArray();
+        RefreshBlockUnitsIfNeeded();
+    }
+
+    public void RefreshBlockUnitsIfNeeded()
+    {
+        BlockUnit[] units = GetComponentsInChildren<BlockUnit>(true);
+        if (units == null || units.Length == 0)
+            return;
+
+        // Order by slotIndex if available, otherwise by local position
+        if (units.All(u => u != null))
+        {
+            HashSet<int> indices = units.Select(u => u.slotIndex).ToHashSet();
+            if (indices.SetEquals(new[] { 0, 1, 2, 3 }))
+                blockUnits = units.OrderBy(u => u.slotIndex).ToArray();
+            else
+                blockUnits = units.OrderByDescending(u => u.transform.localPosition.y)
+                                  .ThenBy(u => u.transform.localPosition.x)
+                                  .ToArray();
+        }
+        else
+        {
+            blockUnits = units.OrderByDescending(u => u.transform.localPosition.y)
+                              .ThenBy(u => u.transform.localPosition.x)
+                              .ToArray();
+        }
     }
 
     public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
     {
         for (int i = 0; i < blockUnits.Length; i++)
-        {
             if (blockUnits[i] == destroyedUnit)
-            {
                 blockUnits[i] = null;
-                break;
-            }
-        }
     }
 
-    // Called by Player when mining this block
+    // Mine the next available sub-unit in the predefined order
     public void MineNext()
     {
-        // Find next mineable unit in order
-        BlockUnit unit = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
-        if (unit == null)
-            return;
+        RefreshBlockUnitsIfNeeded();
 
-        unit.Mine();
+        if (blockUnits == null || blockUnits.Length == 0) return;
 
-        // If all units are gone, destroy block and spawn neighbors
+        BlockUnit nextUnit = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
+        if (nextUnit == null) return;
+
+        nextUnit.Mine();
+
+        // If all units are gone, remove the block and spawn neighbors
         if (blockUnits.All(u => u == null || !u.IsMineable()))
         {
             if (manager == null)

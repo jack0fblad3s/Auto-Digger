@@ -1,0 +1,163 @@
+diff a/Assets/Scripts/Blocks/Block.cs b/Assets/Scripts/Blocks/Block.cs	(rejected hunks)
+@@ -1,52 +1,150 @@
+-﻿using System.Linq;
++﻿using System.Collections.Generic;
++using System.Linq;
+ using UnityEngine;
+ 
+ public class Block : MonoBehaviour
+ {
+     [HideInInspector]
+     public ProceduralBlockManager manager;
+ 
+     // The 4 mineable sub-blocks (TL, TR, BL, BR)
+     public BlockUnit[] blockUnits;
+ 
++    private int blockHits;
++    private int initialUnitCount;
++
+     void Awake()
+     {
+-        // Auto-collect BlockUnits from children
+-        blockUnits = GetComponentsInChildren<BlockUnit>()
+-            .OrderBy(u => u.slotIndex) // 0 TL, 1 TR, 2 BL, 3 BR
+-            .ToArray();
++        BlockUnit[] units = GetComponentsInChildren<BlockUnit>(true);
++        // Prefer explicit slot order (0 TL, 1 TR, 2 BL, 3 BR) when fully configured.
++        if (HasCompleteSlotIndices(units))
++        {
++            blockUnits = units
++                .OrderBy(u => u.slotIndex)
++                .ToArray();
++        }
++        else
++        {
++            // Visual fallback: top to bottom, then left to right.
++            // NOTE: Use X descending for this project's prefab orientation.
++            blockUnits = units
++                .OrderByDescending(u => u.transform.localPosition.y)
++                .ThenByDescending(u => u.transform.localPosition.x)
++                .ToArray();
++        }
++
++        initialUnitCount = blockUnits.Length;
+     }
+ 
++    bool HasCompleteSlotIndices(IEnumerable<BlockUnit> units)
++    {
++        HashSet<int> indices = new();
++        foreach (var unit in units)
++        {
++            if (unit == null) continue;
++            indices.Add(unit.slotIndex);
++        }
++
++        return indices.SetEquals(new[] { 0, 1, 2, 3 });
++    }
++
++
++    void RefreshBlockUnitsIfNeeded()
++    {
++        if (blockUnits != null && blockUnits.Length > 0)
++            return;
++
++        BlockUnit[] units = GetComponentsInChildren<BlockUnit>(true);
++        if (units == null || units.Length == 0)
++            return;
++
++        if (HasCompleteSlotIndices(units))
++        {
++            blockUnits = units
++                .OrderBy(u => u.slotIndex)
++                .ToArray();
++        }
++        else
++        {
++            blockUnits = units
++                .OrderByDescending(u => u.transform.localPosition.y)
++                .ThenByDescending(u => u.transform.localPosition.x)
++                .ToArray();
++        }
++
++        initialUnitCount = blockUnits.Length;
++    }
+ 
+     public void NotifyUnitDestroyed(BlockUnit destroyedUnit)
+     {
+         for (int i = 0; i < blockUnits.Length; i++)
+         {
+             if (blockUnits[i] == destroyedUnit)
+             {
+                 blockUnits[i] = null;
+                 break;
+             }
+         }
+     }
+ 
++    int BlockHitsRequired()
++    {
++        // Floor 1 dirt (rarity 1) should mine in 3 hits.
++        int rarity = blockUnits
++            .Where(u => u != null)
++            .Select(u => Mathf.Max(1, u.oreRarity))
++            .DefaultIfEmpty(1)
++            .Min();
++
++        return 3 * rarity;
++    }
++
++    int DestroyedUnitCount()
++    {
++        int destroyed = 0;
++        for (int i = 0; i < blockUnits.Length; i++)
++            if (blockUnits[i] == null) destroyed++;
++
++        return destroyed;
++    }
++
++    void ForceDestroyNextUnitInOrder()
++    {
++        BlockUnit next = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
++        if (next == null) return;
++
++        while (next != null && next.IsMineable())
++            next.Mine();
++    }
++
+     // Called by Player when mining this block
+     public void MineNext()
+     {
+-        // Find next mineable unit in order
+-        BlockUnit unit = blockUnits.FirstOrDefault(u => u != null && u.IsMineable());
+-        if (unit == null)
++        RefreshBlockUnitsIfNeeded();
++
++        if (blockUnits == null || blockUnits.Length == 0)
+             return;
+ 
+-        unit.Mine();
++        blockHits++;
++
++        int hitsRequired = BlockHitsRequired();
++        int targetDestroyedByNow = Mathf.CeilToInt((float)blockHits / hitsRequired * Mathf.Max(1, initialUnitCount));
++        targetDestroyedByNow = Mathf.Clamp(targetDestroyedByNow, 1, initialUnitCount);
++
++        while (DestroyedUnitCount() < targetDestroyedByNow)
++            ForceDestroyNextUnitInOrder();
+ 
+         // If all units are gone, destroy block and spawn neighbors
+         if (blockUnits.All(u => u == null || !u.IsMineable()))
+         {
+-            if (manager != null)
+-                manager.SpawnNeighbors(this);
++            if (manager == null)
++            {
++                Debug.LogWarning("Block has no manager assigned during removal.", this);
++                return;
++            }
+ 
++            manager.SpawnNeighbors(this);
+             manager.RemoveBlock(this);
+         }
+     }
+ }
